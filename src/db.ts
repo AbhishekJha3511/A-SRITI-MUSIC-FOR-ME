@@ -21,11 +21,17 @@ function openDB(): Promise<IDBDatabase> {
     request.onerror = () => reject(request.error)
   })
 }
-async function request<T>(store: string, mode: IDBTransactionMode, action: (s: IDBObjectStore) => IDBRequest): Promise<T> {
+async function request<T>(
+  store: string,
+  mode: IDBTransactionMode,
+  action: (s: IDBObjectStore) => IDBRequest
+): Promise<T> {
   const db = await openDB()
-  return new Promise((resolve, reject) => {
+
+  return new Promise<T>((resolve, reject) => {
     const tx = db.transaction(store, mode)
     const req = action(tx.objectStore(store))
+
     req.onsuccess = () => resolve(req.result as T)
     req.onerror = () => reject(req.error)
     tx.onabort = () => reject(tx.error)
