@@ -210,7 +210,7 @@ export default function App() {
 
       {view === 'Home' ? <section className="page-content">
         <div className="welcome-line"><div><div className="eyebrow"><span className="live-dot"/> YOUR PERSONAL MUSIC LIBRARY</div><h1>Music, <span>collected.</span></h1><p>Your favorites, your discoveries, all in one place.</p></div><button className="primary-button" onClick={() => fileInputRef.current?.click()}><Upload size={17}/> Import music</button></div>
-        <div className="hero-card"><div className="hero-orb orb-one"/><div className="hero-orb orb-two"/><div className="hero-copy"><span className="pill"><AudioLines size={13}/> YOUR SOUND. YOUR SPACE.</span><h2>A soundtrack<br/>that feels like <em>you.</em></h2><p>Bring your music together and press play.</p><button className="light-button" onClick={() => localTracks.length ? playTrack(localTracks[0], localTracks) : fileInputRef.current?.click()}><Play size={16} fill="currentColor"/> {localTracks.length ? 'Play your library' : 'Add your first songs'}</button></div><div className="hero-art"><div className="art-ring ring-a"/><div className="art-ring ring-b"/><div className="art-disc"><div className="disc-center"><AudioLines size={34}/></div></div><div className="floating-note note-a">♪</div><div className="floating-note note-b">♫</div></div></div>
+        <div className="hero-card"><div className="hero-orb orb-one"/><div className="hero-orb orb-two"/><div className="hero-copy"><span className="pill"><AudioLines size={13}/> YOUR SOUND. YOUR SPACE.</span><h2>A soundtrack<br/>that feels like <em>you.</em></h2><p>Bring your music together and press play.</p><button className="light-button" onClick={() => localTracks.length ? playTrack(localTracks[0], localTracks) : fileInputRef.current?.click()}><Play size={16} fill="currentColor"/> {localTracks.length ? 'Play your library' : 'Add your first songs'}</button></div><div className="hero-art visualizer-art"><div className="visualizer-caption"><span className="visualizer-live-dot"/>{playing && currentIsLocal ? 'LIVE AUDIO VISUALIZER' : 'AUDIO VISUALIZER'}</div><AudioVisualizer audioRef={audioRef} playing={playing && currentIsLocal}/><div className="visualizer-footnote">{current ? current.title : 'PLAY SOMETHING TO BEGIN'}</div></div></div>
         <div className="stats-grid"><div className="stat-card glass"><span>IN YOUR LIBRARY</span><strong>{localTracks.length}</strong><small><Music2 size={14}/> local tracks</small></div><div className="stat-card glass"><span>PLAYLISTS</span><strong>{playlists.length}</strong><small><ListMusic size={14}/> your collections</small></div><div className="stat-card glass"><span>FAVORITES</span><strong>{favorites.length}</strong><small><Heart size={14}/> loved tracks</small></div></div>
         <div className="section-heading"><div><h2>Recently added</h2><p>Fresh additions to your collection</p></div><button className="text-button" onClick={() => setView('Library')}>View library <SkipForward size={14}/></button></div>
         <TrackTable tracks={tracks.slice(0,5)} currentId={currentId} playing={playing} favorites={favorites} onPlay={playTrack} onFavorite={t => setFavorites(old => old.includes(t.id) ? old.filter(x=>x!==t.id) : [...old,t.id])} onRemove={removeTrack} onAddToPlaylist={addToPlaylist} playlists={playlists} cover={cover}/>
@@ -235,6 +235,98 @@ export default function App() {
     <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,.aiff,.wma" multiple hidden onChange={e=>{if(e.target.files)void importFiles(e.target.files);e.target.value=''}}/>
     {notice && <div className="toast" role="status"><Check size={17}/><span>{notice}</span><button className="icon-button" onClick={()=>setNotice('')} aria-label="Dismiss notification"><X size={15}/></button></div>}
   </div>
+}
+
+const visualizerGraphs = new WeakMap<HTMLAudioElement, { context: AudioContext; analyser: AnalyserNode }>()
+
+function AudioVisualizer({ audioRef, playing }: { audioRef: React.RefObject<HTMLAudioElement>; playing: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const contextRef = useRef<AudioContext | null>(null)
+  const playingRef = useRef(playing)
+  useEffect(() => { playingRef.current = playing }, [playing])
+  useEffect(() => {
+    const audio = audioRef.current
+    const canvas = canvasRef.current
+    if (!audio || !canvas) return
+    let frame = 0
+    let disposed = false
+    let analyser: AnalyserNode | null = null
+    try {
+      let graph = visualizerGraphs.get(audio)
+      if (!graph && window.AudioContext) {
+        const context = new window.AudioContext()
+        const node = context.createAnalyser()
+        node.fftSize = 128
+        node.smoothingTimeConstant = 0.82
+        const source = context.createMediaElementSource(audio)
+        source.connect(node)
+        node.connect(context.destination)
+        graph = { context, analyser: node }
+        visualizerGraphs.set(audio, graph)
+      }
+      if (graph) {
+        contextRef.current = graph.context
+        analyserRef.current = graph.analyser
+        analyser = graph.analyser
+      }
+    } catch (error) {
+      console.warn('Audio visualizer could not connect to the audio output.', error)
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const draw = () => {
+      if (disposed) return
+      const rect = canvas.getBoundingClientRect()
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const width = Math.max(1, Math.floor(rect.width * dpr))
+      const height = Math.max(1, Math.floor(rect.height * dpr))
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height }
+      ctx.clearRect(0, 0, width, height)
+      const count = 48
+      const gap = Math.max(2 * dpr, width / 230)
+      const barWidth = (width - gap * (count - 1)) / count
+      const values = new Uint8Array(analyser?.frequencyBinCount || count)
+      if (analyser) analyser.getByteFrequencyData(values)
+      const center = height * 0.51
+      for (let i = 0; i < count; i++) {
+        const spectrumIndex = Math.min(values.length - 1, Math.floor(i / count * values.length * 0.86))
+        const raw = analyser && playingRef.current ? (values[spectrumIndex] || 0) / 255 : 0
+        const envelope = Math.pow(Math.sin((i / (count - 1)) * Math.PI), 0.65)
+        const idle = 0.045 + Math.abs(Math.sin(i * 0.62)) * 0.025
+        const motion = playingRef.current ? (raw * 0.84 + idle) : idle
+        const barHeight = Math.max(3 * dpr, motion * envelope * height * 1.75)
+        const x = i * (barWidth + gap)
+        const y = center - barHeight / 2
+        const gradient = ctx.createLinearGradient(0, y, 0, y + barHeight)
+        gradient.addColorStop(0, '#f8f8f8')
+        gradient.addColorStop(0.5, '#a5a5a5')
+        gradient.addColorStop(1, '#454545')
+        ctx.fillStyle = gradient
+        const radius = Math.min(barWidth / 2, 3 * dpr)
+        ctx.beginPath()
+        ctx.roundRect(x, y, Math.max(1, barWidth), barHeight, radius)
+        ctx.fill()
+        ctx.globalAlpha = 0.12
+        ctx.fillRect(x, center + barHeight / 2 + 2 * dpr, Math.max(1, barWidth), Math.max(1, barHeight * 0.22))
+        ctx.globalAlpha = 1
+      }
+      frame = window.requestAnimationFrame(draw)
+    }
+    frame = window.requestAnimationFrame(draw)
+    return () => {
+      disposed = true
+      window.cancelAnimationFrame(frame)
+      // Keep the per-audio-element graph alive so React StrictMode can safely remount this canvas.
+    }
+  }, [audioRef])
+  useEffect(() => {
+    const context = contextRef.current
+    if (!context) return
+    if (playing && context.state === 'suspended') void context.resume().catch(() => undefined)
+    if (!playing && context.state === 'running') void context.suspend().catch(() => undefined)
+  }, [playing])
+  return <canvas className="audio-visualizer" ref={canvasRef} role="img" aria-label={playing ? 'Live audio frequency visualizer' : 'Audio visualizer idle'} />
 }
 
 function TrackTable({ tracks, currentId, playing, favorites, onPlay, onFavorite, onRemove, onAddToPlaylist, playlists, cover }: {

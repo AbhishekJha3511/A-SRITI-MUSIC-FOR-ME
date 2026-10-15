@@ -21,7 +21,8 @@ npm run preview
 ```
 
 ## Included in this MVP
-- Responsive dark/glass-inspired UI
+- Responsive black-and-white minimalist UI with soft glass panels
+- Live Web Audio API frequency visualizer for local audio playback
 - Import supported audio files into IndexedDB
 - Optional metadata parsing (title, artist, album, duration, embedded artwork)
 - Local audio playback, seek, volume, next/previous, shuffle and repeat
