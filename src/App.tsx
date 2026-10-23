@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { parseBlob } from 'music-metadata-browser'
 import { deleteTrack, getPlaylists, getSetting, getTracks, putPlaylist, putSetting, putTrack, type Playlist, type Track } from './db'
+import { cloudConfigured, downloadSnapshot, getCloudSession, signIn, signOut, uploadSnapshot, type CloudSnapshot } from './cloud'
 
 type View = 'Home' | 'Library' | 'Playlists' | 'Favorites' | 'YouTube'
 const id = () => crypto.randomUUID()
@@ -47,6 +48,13 @@ export default function App() {
   const [ytPlayingId, setYtPlayingId] = useState<string | null>(null)
   const [showAddPlaylist, setShowAddPlaylist] = useState(false)
   const [playlistName, setPlaylistName] = useState('')
+  const [cloudOpen, setCloudOpen] = useState(false)
+  const [cloudEmail, setCloudEmail] = useState('')
+  const [cloudPassword, setCloudPassword] = useState('')
+  const [cloudCreate, setCloudCreate] = useState(false)
+  const [cloudBusy, setCloudBusy] = useState(false)
+  const [cloudUser, setCloudUser] = useState(() => getCloudSession()?.user.email || '')
+  const [lastSynced, setLastSynced] = useState('')
   const audioRef = useRef<HTMLAudioElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const current = tracks.find(t => t.id === currentId) || null
@@ -55,6 +63,23 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
+      // Public starter catalog: shipped with the app so every visitor sees these links,
+      // even without creating an account or enabling cloud sync. YouTube keeps playback
+      // on its official embedded player; the app does not copy or host the audio.
+      const featuredYouTube: Track[] = [
+        { id: 'featured-youtube-q1zbZAR8Zpg', title: 'Featured YouTube Track 01', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=q1zbZAR8Zpg', addedAt: 7 },
+        { id: 'featured-youtube-LV_wiOhO40Q', title: 'Featured YouTube Track 02', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=LV_wiOhO40Q', addedAt: 6 },
+        { id: 'featured-youtube-CEbB9kdu8ng', title: 'Featured YouTube Track 03', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=CEbB9kdu8ng', addedAt: 5 },
+        { id: 'featured-youtube-WnU0lH6C0EA', title: 'Featured YouTube Track 04', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=WnU0lH6C0EA', addedAt: 4 },
+        { id: 'featured-youtube-V8zXLMIjlcw', title: 'Featured YouTube Track 05', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=V8zXLMIjlcw', addedAt: 3 },
+        { id: 'featured-youtube-qLSXgrBsXs0', title: 'Featured YouTube Track 06', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=qLSXgrBsXs0', addedAt: 2 },
+        { id: 'featured-youtube-tFNWHLEIiJ0', title: 'Featured YouTube Track 07', artist: 'YouTube', album: 'A-SRITI Featured Collection', duration: 0, kind: 'youtube', url: 'https://www.youtube.com/watch?v=tFNWHLEIiJ0', addedAt: 1 },
+      ]
+      const existing = await getTracks()
+      const existingIds = new Set(existing.map(track => track.id))
+      for (const track of featuredYouTube) {
+        if (!existingIds.has(track.id)) await putTrack(track)
+      }
       const [all, lists, fav, last] = await Promise.all([getTracks(), getPlaylists(), getSetting('favorites'), getSetting('currentId')])
       setTracks(all.sort((a,b) => b.addedAt - a.addedAt))
       setPlaylists(lists)
@@ -80,6 +105,46 @@ export default function App() {
   useEffect(() => { if (current?.kind === 'youtube' && current.url) { setYtPlayingId(youtubeId(current.url)); setPlaying(false) } else setYtPlayingId(null) }, [currentId])
   const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(''), 4200) }
 
+  const makeCloudSnapshot = async (): Promise<CloudSnapshot> => ({
+    // Local audio blobs never leave this device. Only link-based tracks and their metadata sync.
+    tracks: tracks.filter(t => t.kind !== 'local' && Boolean(t.url)).map(({ blob: _blob, ...t }) => t),
+    playlists: playlists.map(p => ({ ...p })),
+    favorites: favorites.filter(f => tracks.some(t => t.id === f && t.kind !== 'local')),
+    updatedAt: new Date().toISOString()
+  })
+  const doCloudAuth = async () => {
+    setCloudBusy(true)
+    try {
+      const session = await signIn(cloudEmail.trim(), cloudPassword, cloudCreate)
+      setCloudUser(session.user.email || cloudEmail.trim())
+      setCloudPassword('')
+      notify(cloudCreate ? 'Account created. Your A-SRITI cloud library is ready.' : 'Signed in to A-SRITI sync.')
+    } catch (e) { notify(e instanceof Error ? e.message : 'Could not sign in.') }
+    finally { setCloudBusy(false) }
+  }
+  const syncCloud = async () => {
+    setCloudBusy(true)
+    try {
+      const remote = await downloadSnapshot()
+      const local = await makeCloudSnapshot()
+      const remoteTracks = remote?.tracks || []
+      const mergedTracks = new Map<string, Omit<Track, 'blob'>>()
+      for (const t of remoteTracks) mergedTracks.set(t.id, t)
+      for (const t of local.tracks) mergedTracks.set(t.id, t)
+      for (const t of mergedTracks.values()) await putTrack(t as Track)
+      const mergedLists = new Map<string, Playlist>()
+      for (const p of remote?.playlists || []) mergedLists.set(p.id, p)
+      for (const p of local.playlists) mergedLists.set(p.id, p)
+      for (const p of mergedLists.values()) await putPlaylist(p)
+      const mergedFavs = [...new Set([...(remote?.favorites || []), ...local.favorites])]
+      await putSetting('favorites', mergedFavs)
+      await refresh()
+      await uploadSnapshot({ tracks: [...mergedTracks.values()], playlists: [...mergedLists.values()], favorites: mergedFavs, updatedAt: new Date().toISOString() })
+      setLastSynced(new Date().toLocaleString())
+      notify(`Cloud sync complete · ${mergedTracks.size} saved links synced. Local audio files stayed on this device.`)
+    } catch (e) { notify(e instanceof Error ? e.message : 'Cloud sync failed. Check your setup and try again.') }
+    finally { setCloudBusy(false) }
+  }
   const importFiles = async (files: FileList | File[]) => {
     const accepted = Array.from(files).filter(f => f.type.startsWith('audio/') || /\.(mp3|wav|flac|m4a|aac|ogg|opus|aiff|wma)$/i.test(f.name))
     if (!accepted.length) { notify('No supported audio files selected.'); return }
@@ -206,7 +271,7 @@ export default function App() {
     </aside>
 
     <main className="main-content">
-      <header className="topbar"><div className="breadcrumbs">Your space <span>/</span> <strong>{pageTitle}</strong></div><div className="top-actions"><label className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search your music..." aria-label="Search music"/><kbd>⌘ K</kbd></label><button className="avatar" title="A-SRITI">A</button></div></header>
+      <header className="topbar"><div className="breadcrumbs">Your space <span>/</span> <strong>{pageTitle}</strong></div><div className="top-actions"><label className="search-box"><Search size={17}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search your music..." aria-label="Search music"/><kbd>⌘ K</kbd></label><button className="secondary-button cloud-open-button" onClick={() => setCloudOpen(true)} title="Cloud sync"><Radio size={16}/>{cloudUser ? 'Synced account' : 'Cloud sync'}</button><button className="avatar" title="A-SRITI">A</button></div></header>
 
       {view === 'Home' ? <section className="page-content">
         <div className="welcome-line"><div><div className="eyebrow"><span className="live-dot"/> YOUR PERSONAL MUSIC LIBRARY</div><h1>Music, <span>collected.</span></h1><p>Your favorites, your discoveries, all in one place.</p></div><button className="primary-button" onClick={() => fileInputRef.current?.click()}><Upload size={17}/> Import music</button></div>
@@ -231,6 +296,9 @@ export default function App() {
       <div className="player-right"><button className={`icon-button ${queueOpen?'control-on':''}`} aria-label="Toggle queue" onClick={()=>setQueueOpen(!queueOpen)}><ListMusic size={19}/></button><Volume2 size={18}/><input className="volume-range" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={e=>setVolume(Number(e.target.value))}/></div>
     </div>
     {queueOpen && <div className="queue-panel glass"><div className="queue-head"><div><strong>Playback queue</strong><span>{queue.length} tracks</span></div><button className="icon-button" onClick={()=>setQueueOpen(false)} aria-label="Close queue"><X size={18}/></button></div>{queue.length ? queue.map((qid,i)=>{const t=tracks.find(x=>x.id===qid);return t?<button className={`queue-item ${qid===currentId?'queue-active':''}`} key={`${qid}-${i}`} onClick={()=>playTrack(t,queue.map(x=>tracks.find(y=>y.id===x)).filter((x):x is Track=>Boolean(x)))}>{cover(t)}<span className="truncate">{t.title}</span>{qid===currentId&&<AudioLines size={15}/>}</button>:null}) : <p className="muted">Play a track to start your queue.</p>}</div>}
+    {cloudOpen && <div className="modal-backdrop" onClick={() => setCloudOpen(false)}><div className="modal glass cloud-modal" onClick={e => e.stopPropagation()}><button className="icon-button modal-close" aria-label="Close" onClick={() => setCloudOpen(false)}><X size={18}/></button><div className="modal-icon"><Radio size={24}/></div><h2>Sync your music links</h2><p>Keep saved links, playlists and favorites in sync between your phone and computer. Imported audio files remain private on the device where they were added.</p>
+      {!cloudConfigured ? <div className="cloud-setup-note"><strong>One-time setup required</strong><span>Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to your local <code>.env.local</code> file and configure the SQL table from the included setup guide.</span></div> : cloudUser ? <><div className="cloud-account"><Check size={17}/><span>Signed in as <strong>{cloudUser}</strong></span></div><button className="primary-button full-width" disabled={cloudBusy} onClick={() => void syncCloud()}>{cloudBusy ? 'Syncing…' : 'Sync now'}</button>{lastSynced && <span className="cloud-last-sync">Last synced this session: {lastSynced}</span>}<button className="text-button full-width" onClick={() => { signOut(); setCloudUser(''); setLastSynced(''); notify('Signed out of cloud sync.') }}>Sign out</button></> : <><input type="email" autoComplete="email" value={cloudEmail} onChange={e=>setCloudEmail(e.target.value)} placeholder="Email address" aria-label="Email address"/><input type="password" autoComplete={cloudCreate?'new-password':'current-password'} value={cloudPassword} onChange={e=>setCloudPassword(e.target.value)} placeholder="Password" aria-label="Password" onKeyDown={e=>e.key==='Enter'&&void doCloudAuth()}/><button className="primary-button full-width" disabled={cloudBusy || !cloudEmail.includes('@') || cloudPassword.length < 6} onClick={() => void doCloudAuth()}>{cloudBusy ? 'Please wait…' : cloudCreate ? 'Create account' : 'Sign in'}</button><button className="text-button full-width" onClick={() => setCloudCreate(!cloudCreate)}>{cloudCreate ? 'Already have an account? Sign in' : 'New to A-SRITI? Create account'}</button></>}
+      <span className="cloud-footnote">Only link metadata is synced. Audio blobs are never uploaded.</span></div></div>}
     {showAddPlaylist && <div className="modal-backdrop" onClick={()=>setShowAddPlaylist(false)}><div className="modal glass" onClick={e=>e.stopPropagation()}><button className="icon-button modal-close" aria-label="Close" onClick={()=>setShowAddPlaylist(false)}><X size={18}/></button><div className="modal-icon"><ListPlus size={24}/></div><h2>Create a playlist</h2><p>Give your collection a name. You can add tracks from the library.</p><input autoFocus value={playlistName} onChange={e=>setPlaylistName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&void createPlaylist()} placeholder="e.g. Late night listening"/><button className="primary-button full-width" onClick={()=>void createPlaylist()} disabled={!playlistName.trim()}><Plus size={16}/> Create playlist</button></div></div>}
     <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,.aiff,.wma" multiple hidden onChange={e=>{if(e.target.files)void importFiles(e.target.files);e.target.value=''}}/>
     {notice && <div className="toast" role="status"><Check size={17}/><span>{notice}</span><button className="icon-button" onClick={()=>setNotice('')} aria-label="Dismiss notification"><X size={15}/></button></div>}

@@ -44,3 +44,7 @@ npm run preview
 
 ## Notes
 No music is bundled with the project. Import audio files you have the right to use.
+
+## Cross-device cloud sync
+
+A-SRITI can sync saved external links, playlist metadata, and favorites between devices using Supabase. Local audio files remain in each browser's IndexedDB and are not uploaded. Follow [`CLOUD-SYNC-SETUP.md`](./CLOUD-SYNC-SETUP.md) and run [`supabase/cloud-sync.sql`](./supabase/cloud-sync.sql) in the Supabase SQL Editor.

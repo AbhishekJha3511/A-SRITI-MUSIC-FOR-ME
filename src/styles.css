@@ -49,3 +49,14 @@ button:focus-visible,input:focus-visible{outline-color:#f4f4f4}
 @media(max-width:390px){.visualizer-art{right:0;width:42%;margin-right:-5px}.audio-visualizer{height:72px}}
 @media(max-width:780px){.visualizer-art{position:absolute;right:0;width:44%;min-width:0;height:150px;margin-right:0;opacity:.96!important}.hero-copy{max-width:58%}}
 @media(max-width:390px){.visualizer-art{right:-3px;width:40%;height:130px}.hero-copy{max-width:60%}}
+
+/* Cloud sync account dialog */
+.cloud-open-button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.cloud-modal { gap: 14px; }
+.cloud-modal > p { line-height: 1.65; }
+.cloud-modal input { width: 100%; box-sizing: border-box; }
+.cloud-setup-note { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line, rgba(255,255,255,.12)); border-radius: 14px; padding: 14px; font-size: 13px; line-height: 1.6; }
+.cloud-setup-note code { overflow-wrap: anywhere; }
+.cloud-account { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line, rgba(255,255,255,.12)); border-radius: 12px; padding: 12px; font-size: 13px; overflow-wrap: anywhere; }
+.cloud-last-sync, .cloud-footnote { display: block; color: var(--muted, #888); font-size: 11px; line-height: 1.5; text-align: center; }
+@media (max-width: 620px) { .cloud-open-button { padding-inline: 9px; font-size: 11px; } }
